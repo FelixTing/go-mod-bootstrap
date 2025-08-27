@@ -123,3 +123,5 @@ require (
 	google.golang.org/protobuf v1.36.7 // indirect
 	nhooyr.io/websocket v1.8.17 // indirect
 )
+
+replace github.com/edgexfoundry/go-mod-messaging/v4 => github.com/FelixTing/go-mod-messaging/v4 v4.0.0-20250827055920-aeffae3cef0a

@@ -19,11 +19,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
-
 	"github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/config"
 	"github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/container"
 	"github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/environment"
@@ -34,12 +29,19 @@ import (
 	"github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/startup"
 	"github.com/edgexfoundry/go-mod-bootstrap/v4/bootstrap/utils"
 	"github.com/edgexfoundry/go-mod-bootstrap/v4/di"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/edgexfoundry/go-mod-registry/v4/registry"
 
 	"github.com/edgexfoundry/go-mod-core-contracts/v4/clients/logger"
 	"github.com/edgexfoundry/go-mod-core-contracts/v4/models"
 )
+
+const ShutDownKey = "shutdown"
 
 // Deferred defines the signature of a function returned by RunAndReturnWaitGroup that should be executed via defer.
 type Deferred func()
@@ -53,7 +55,7 @@ func fatalError(err error, lc logger.LoggingClient) {
 
 // translateInterruptToCancel spawns a go routine to translate the receipt of a SIGTERM signal to a call to cancel
 // the context used by the bootstrap implementation.
-func translateInterruptToCancel(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc) {
+func translateInterruptToCancel(ctx context.Context, wg *sync.WaitGroup, cancel context.CancelFunc, dic *di.Container) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -66,6 +68,15 @@ func translateInterruptToCancel(ctx context.Context, wg *sync.WaitGroup, cancel 
 		signal.Notify(signalStream, os.Interrupt, syscall.SIGTERM)
 		select {
 		case <-signalStream:
+			lc := container.LoggingClientFrom(dic.Get)
+			messageBus := container.MessagingClientFrom(dic.Get)
+			signaler := messageBus.CriticalOperationSignaler()
+			lc.Debug("Waiting for critical operations to complete before canceling the context")
+			if signaler.WaitForCriticalOperations(10 * time.Second) {
+				lc.Debug("All critical operations completed")
+			} else {
+				lc.Warnf("Timeout waiting for critical operations, continuing with shutdown")
+			}
 			cancel()
 			return
 		case <-ctx.Done():
@@ -110,7 +121,7 @@ func RunAndReturnWaitGroup(
 	}
 
 	utils.AdaptLogrusBasedLogging(lc)
-	translateInterruptToCancel(ctx, &wg, cancel)
+	translateInterruptToCancel(ctx, &wg, cancel, dic)
 
 	envVars := environment.NewVariables(lc)
 
